@@ -1,29 +1,29 @@
 // =============================================================================
-//  Arduino Due — Sine Wave Generator
-//  Output : DAC0 (pin DAC0 / A13), 0–3.3 V, 12-bit
+//  Arduino Due -- Sine Wave Generator
+//  Output : DAC0 (pin DAC0 / A13), 0-3.3 V, 12-bit
 //  Method : 4096-point LUT + linear interpolation, TC0 timer ISR
 // =============================================================================
 //
 //  Wiring
-//  ──────
-//  DAC0 (A13)  →  amplifier input (via DC-blocking cap if needed)
-//  GND         →  amplifier GND
+//  ------
+//  DAC0 (A13)  ->  amplifier input (via DC-blocking cap if needed)
+//  GND         ->  amplifier GND
 //
 //  The DAC mid-scale sits at ~1.65 V (code 2048).
-//  Full-scale swing is 0 V – 3.3 V (codes 0 – 4095).
-//  Use a series 10 µF electrolytic (or 100 µF for low frequencies) to remove
+//  Full-scale swing is 0 V - 3.3 V (codes 0 - 4095).
+//  Use a series 10 uF electrolytic (or 100 uF for low frequencies) to remove
 //  the DC offset before feeding a real amplifier input.
 //
 //  Usage
-//  ──────
-//  • Set SAMPLE_RATE and FREQUENCY below.
-//  • Or send a new frequency over Serial (115200 baud):
-//        "f 440\n"   → sets 440 Hz
-//        "s 96000\n" → sets 96 000 Hz sample rate (restarts timer)
-//        "?\n"       → prints current settings
+//  ------
+//  * Set SAMPLE_RATE and FREQUENCY below.
+//  * Or send a new frequency over Serial (115200 baud):
+//        "f 440\n"   -> sets 440 Hz
+//        "s 96000\n" -> sets 96 000 Hz sample rate (restarts timer)
+//        "?\n"       -> prints current settings
 //
-//  ──────
-//  Practical reliable sample rate ~170–200 kHz with this ISR approach (see bottom of file for details).
+//  ------
+//  Practical reliable sample rate ~170-200 kHz with this ISR approach (see bottom of file for details).
 // =============================================================================
 
 #include <Arduino.h>
@@ -31,32 +31,32 @@
 
 TM1638 module(A7, A6, A5);
 
-// ── User-configurable defaults ────────────────────────────────────────────────
+// -- User-configurable defaults ------------------------------------------------
 static uint32_t SAMPLE_RATE = 200000UL; // Hz
 static double FREQUENCY = 20000.0f;		// Hz
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 inline constexpr uint LUT_SIZE = 4096u;
 inline constexpr uint LUT_MASK = LUT_SIZE - 1; // 0x0FFF  (LUT_SIZE must stay power-of-2)
 
-// ── Sine LUT (built once in setup) ────────────────────────────────────────────
+// -- Sine LUT (built once in setup) --------------------------------------------
 static uint16_t sineLUT[LUT_SIZE];
 
 static void buildLUT()
 {
 	for (uint32_t i = 0; i < LUT_SIZE; i++)
 	{
-		// Full-range: 0 … 4095, centred at 2047.5
+		// Full-range: 0 ... 4095, centred at 2047.5
 		// Using double for precision at low frequencies
 		static constexpr double midpoint = 2047.5;
 		sineLUT[i] = (uint16_t)::lround(sin(2.0 * M_PI * (double)i / (double)LUT_SIZE) * midpoint + midpoint);
 	}
 }
 
-// ── Phase accumulator ─────────────────────────────────────────────────────────
-//  32-bit accumulator, bits 31..20 - LUT index (0–4095), 19..0 - interpolation fraction (0 = 0 %, 0xFFFFF ≈ 100%)
+// -- Phase accumulator ---------------------------------------------------------
+//  32-bit accumulator, bits 31..20 - LUT index (0-4095), 19..0 - interpolation fraction (0 = 0 %, 0xFFFFF ~ 100%)
 //  phaseIncrement = round( frequency / sampleRate * 2^32 )
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 static volatile uint32_t phaseAccum = 0;
 static volatile uint32_t phaseIncrement = 0;
 
@@ -69,7 +69,7 @@ static void setFrequency(double freq)
 	module.setDisplayToDecNumber((int)FREQUENCY, 0);
 }
 
-// ── Timer ISR — TC0 channel 0 ────────────────────────────────────────────────
+// -- Timer ISR -- TC0 channel 0 ------------------------------------------------
 void TC0_Handler()
 {
 	// Reading TC_SR acknowledges and clears the interrupt flags
@@ -80,8 +80,8 @@ void TC0_Handler()
 	phaseAccum = phase + phaseIncrement;
 
 	// Split into integer index and fractional part
-	uint32_t idx = phase >> 20;			  // top 12 bits  → 0 … 4095
-	uint32_t frac = phase & 0x000FFFFFUL; // bottom 20 bits → 0 … 1 048 575
+	uint32_t idx = phase >> 20;			  // top 12 bits  -> 0 ... 4095
+	uint32_t frac = phase & 0x000FFFFFUL; // bottom 20 bits -> 0 ... 1 048 575
 
 	// Linear interpolation between adjacent LUT samples
 	int32_t a = sineLUT[idx];
@@ -92,10 +92,10 @@ void TC0_Handler()
 	DACC->DACC_CDR = (uint32_t)value;
 }
 
-// ── Timer setup ───────────────────────────────────────────────────────────────
+// -- Timer setup ---------------------------------------------------------------
 static void startTimer(uint32_t sampleRate)
 {
-	// TC0, channel 0  →  IRQ TC0_IRQn
+	// TC0, channel 0  ->  IRQ TC0_IRQn
 	pmc_enable_periph_clk(ID_TC0);
 
 	TC_Configure(TC0, 0,
@@ -116,7 +116,7 @@ static void startTimer(uint32_t sampleRate)
 	TC0->TC_CHANNEL[0].TC_IER = TC_IER_CPCS;
 	TC0->TC_CHANNEL[0].TC_IDR = ~TC_IER_CPCS;
 
-	NVIC_SetPriority(TC0_IRQn, 0); // highest priority → lowest jitter
+	NVIC_SetPriority(TC0_IRQn, 0); // highest priority -> lowest jitter
 	NVIC_EnableIRQ(TC0_IRQn);
 }
 
@@ -126,7 +126,7 @@ static void stopTimer()
 	TC_Stop(TC0, 0);
 }
 
-// ── DAC initialisation ────────────────────────────────────────────────────────
+// -- DAC initialisation --------------------------------------------------------
 static void initDAC()
 {
 	pmc_enable_periph_clk(ID_DACC);
@@ -136,20 +136,20 @@ static void initDAC()
 	DACC->DACC_MR = DACC_MR_TRGEN_DIS			// software trigger (write to CDR starts conversion)
 					| DACC_MR_USER_SEL_CHANNEL0 // fixed channel 0 (DAC0 pin)
 					| DACC_MR_WORD_HALF			// 12-bit half-word mode
-					| DACC_MR_REFRESH(1)		// refresh every ~23 µs (min value)
+					| DACC_MR_REFRESH(1)		// refresh every ~23 us (min value)
 					| DACC_MR_STARTUP_8;		// 8-period start-up (fastest)
 
 	DACC->DACC_CHER = DACC_CHER_CH0; // enable channel 0
 }
 
-// ── Serial command parser ─────────────────────────────────────────────────────
+// -- Serial command parser -----------------------------------------------------
 static void printStatus()
 {
 	uint32_t rc = TC0->TC_CHANNEL[0].TC_RC;
 	float actualRate = (float)(VARIANT_MCK / 2u) / (float)rc;
 	float actualFreq = (float)phaseIncrement / 4294967296.0f * actualRate;
 
-	Serial.println("─────────────────────────────");
+	Serial.println("-----------------------------");
 	Serial.print("  Target sample rate : ");
 	Serial.print(SAMPLE_RATE);
 	Serial.println(" Hz");
@@ -164,7 +164,7 @@ static void printStatus()
 	Serial.println(" Hz");
 	Serial.print("  Phase increment    : 0x");
 	Serial.println(phaseIncrement, HEX);
-	Serial.println("─────────────────────────────");
+	Serial.println("-----------------------------");
 }
 
 static void handleSerial()
@@ -194,7 +194,7 @@ static void handleSerial()
 				{
 					FREQUENCY = f;
 					setFrequency(FREQUENCY);
-					Serial.print("Frequency → ");
+					Serial.print("Frequency -> ");
 					Serial.print(FREQUENCY, 3);
 					Serial.println(" Hz");
 					printStatus();
@@ -213,14 +213,14 @@ static void handleSerial()
 					SAMPLE_RATE = sr;
 					setFrequency(FREQUENCY);
 					startTimer(SAMPLE_RATE);
-					Serial.print("Sample rate → ");
+					Serial.print("Sample rate -> ");
 					Serial.print(SAMPLE_RATE);
 					Serial.println(" Hz");
 					printStatus();
 				}
 				else
 				{
-					Serial.println("Error: sample rate out of range (8000 – 400000)");
+					Serial.println("Error: sample rate out of range (8000 - 400000)");
 				}
 			}
 			else
@@ -236,7 +236,7 @@ static void handleSerial()
 	}
 }
 
-// ── Arduino entry points ──────────────────────────────────────────────────────
+// -- Arduino entry points ------------------------------------------------------
 void setup()
 {
 	Serial.begin(9600);
@@ -247,7 +247,7 @@ void setup()
 	initDAC();
 	startTimer(SAMPLE_RATE);
 
-	Serial.println("\nArduino Due Sine Generator — ready");
+	Serial.println("\nArduino Due Sine Generator -- ready");
 	Serial.println("Commands:  f <Hz>   s <Hz>   ?");
 	printStatus();
 
@@ -265,39 +265,28 @@ void loop()
 }
 
 // =============================================================================
-//  Practical maximum reliable sample rate — explained
+//  Practical maximum reliable sample rate -- explained
 // =============================================================================
 //
 //  Clock chain
-//  ───────────
-//  MCK = 84 MHz  →  TC TIMER_CLOCK1 = MCK/2 = 42 MHz
-//  Minimum RC register value = 2  →  absolute ceiling = 21 MHz ISR rate.
+//  -----------
+//  MCK = 84 MHz  ->  TC TIMER_CLOCK1 = MCK/2 = 42 MHz
+//  Minimum RC register value = 2  ->  absolute ceiling = 21 MHz ISR rate.
 //  In practice the ISR itself takes CPU time:
 //
 //  TC0_Handler body (worst-case ARM Cortex-M3 cycle count estimate)
-//  ────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------
 //   ISR entry / exit (stacking, unstacking)    ~  12 cycles
 //   TC_SR read (32-bit peripheral read)         ~   4 cycles
 //   32-bit add (phase accumulator)              ~   1 cycle
 //   32-bit shift + mask (index / frac)          ~   2 cycles
 //   Two 16-bit LUT reads                        ~   6 cycles (cache hit)
-//   32-bit multiply (interpolation)             ~   3–5 cycles (M3 1-cycle MUL)
+//   32-bit multiply (interpolation)             ~   3-5 cycles (M3 1-cycle MUL)
 //   Arithmetic shift right 20                   ~   1 cycle
 //   DACC CDR write (32-bit peripheral write)    ~   4 cycles
-//   ─────────────────────────────────────────────────────────────
-//   Total                                       ~ 33–40 cycles
+//   -------------------------------------------------------------
+//   Total                                       ~ 33-40 cycles
 //
-//  At 84 MHz that implies a theoretical maximum of ~2.1–2.5 MHz ISR rate.
+//  At 84 MHz that implies a theoretical maximum of ~2.1-2.5 MHz ISR rate.
 //  However, peripheral bus latency, cache misses on the first LUT access, and
 //  the NVIC overhead in the real silicon are higher than ideal estimates.
-//  Measured results on real hardware consistently show:
-//
-//  ┌────────────────┬─────────────────────────────────────────────────────┐
-//  │ Sample rate    │ Behaviour                                            │
-//  ├────────────────┼─────────────────────────────────────────────────────┤
-//  │ ≤ 96 kHz       │ Ideal — plenty of CPU headroom for Serial etc.       │
-//  │ 192 kHz        │ Excellent — still ~55 % CPU free                     │
-//  │ ~170–200 kHz   │ Practical reliable maximum for this ISR sketch       │
-//  │ > 200 kHz      │ ISRs begin to overlap; waveform degrades             │
-//  └────────────────┴─────────────────────────────────────────────────────┘
-// =============================================================================
