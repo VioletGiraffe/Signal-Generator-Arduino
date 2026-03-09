@@ -32,8 +32,8 @@
 TM1638 module(A7, A6, A5);
 
 // -- User-configurable defaults ------------------------------------------------
-static uint32_t SAMPLE_RATE = 200000UL; // Hz
-static double FREQUENCY = 20000.0f;		// Hz
+static uint32_t SAMPLE_RATE = 300000UL; // Hz
+static double FREQUENCY = 440.0f;		// Hz
 
 // -- Constants -----------------------------------------------------------------
 inline constexpr uint LUT_SIZE = 4096u;
@@ -60,13 +60,30 @@ static void buildLUT()
 static volatile uint32_t phaseAccum = 0;
 static volatile uint32_t phaseIncrement = 0;
 
+// -- Amplitude -----------------------------------------------------------------
+//  AMPLITUDE  : 0-100 percent (UI / display use only, not read in ISR)
+//  amplScale  : pre-computed fixed-point factor 0-4096 (ISR use, avoids division)
+//               4096 = 100%, updated atomically as a 32-bit aligned write
+// -----------------------------------------------------------------------------
+static int AMPLITUDE = 100;
+static volatile uint32_t amplScale = 4096;
+
+static void updateDisplay(); // forward declaration
+
+static void setAmplitude(int pct)
+{
+	AMPLITUDE = constrain(pct, 0, 100);
+	amplScale = (uint32_t)(AMPLITUDE * 4096 / 100);
+	updateDisplay();
+}
+
 static void setFrequency(double freq)
 {
 	// Use double for precision at low frequencies
 	FREQUENCY = freq;
 	phaseIncrement = ::lround(freq / (double)SAMPLE_RATE * 4294967296.0);
 
-	module.setDisplayToDecNumber((int)FREQUENCY, 0);
+	updateDisplay();
 }
 
 // -- Timer ISR -- TC0 channel 0 ------------------------------------------------
@@ -87,6 +104,10 @@ void TC0_Handler()
 	int32_t a = sineLUT[idx];
 	int32_t b = sineLUT[(idx + 1u) & LUT_MASK];
 	int32_t value = a + (((b - a) * (int32_t)frac) >> 20);
+
+	// Apply amplitude scaling around midpoint (2048)
+	// amplScale is 0-4096 where 4096 = 100%; shift-by-12 replaces division
+	value = 2048 + (((value - 2048) * (int32_t)amplScale) >> 12);
 
 	// Write directly to DAC conversion register (fastest path, no API overhead)
 	DACC->DACC_CDR = (uint32_t)value;
@@ -140,6 +161,139 @@ static void initDAC()
 					| DACC_MR_STARTUP_8;		// 8-period start-up (fastest)
 
 	DACC->DACC_CHER = DACC_CHER_CH0; // enable channel 0
+}
+
+// -- Display and button UI -----------------------------------------------------
+//
+//  Display layout (8 x 7-segment digits):
+//    [0..4] frequency in Hz, right-aligned; dot on digit 4 acts as separator
+//    [5..7] amplitude in %, right-aligned
+//  Example at 1 kHz / 75%:  "  1000.075"  (dot on digit 4)
+//
+//  LED bar graph: represents amplitude in 12.5% steps (8 LEDs = 100%)
+//
+//  Button mapping:
+//    B0  freq down    B1  freq up    B6  ampl down    B7  ampl up
+//
+//  Three step tiers based on how long the button is held:
+//    click  (< BTN_HOLD1_MS)  : fine step,   fires once on press
+//    hold 1 (>= BTN_HOLD1_MS) : medium step, autorepeats every BTN_REPEAT_MS
+//    hold 2 (>= BTN_HOLD2_MS) : coarse step, autorepeats every BTN_REPEAT_MS
+//
+//  Frequency steps (magnitude-based, always land on clean numbers):
+//    fine   = 10 ^ (floor(log10(freq)) - 2),  minimum 1 Hz
+//    medium = 10 ^ (floor(log10(freq)) - 1),  minimum 1 Hz
+//    coarse = 10 ^ (floor(log10(freq)))
+//
+//  Amplitude steps: fine = 1%, medium = 5%, coarse = 10%
+// -----------------------------------------------------------------------------
+
+inline void updateDisplay()
+{
+	char buf[9];
+	snprintf(buf, sizeof(buf), "%5d%3d", (int)round(FREQUENCY), AMPLITUDE);
+	// dots bitmask: bit7=pos0 ... bit0=pos7; dot on pos4 -> bit3 -> 0x08
+	module.setDisplayToString(buf, 0x08);
+}
+
+inline double calcFreqStep(int tier)
+{
+	const float f   = max((float)FREQUENCY, 1.0f);
+	const float stepForTier[3] { f * 0.002f, f * 0.01f, max(f * 0.05f, 20.0f) };
+	return (double)max(stepForTier[tier], 1.0f);
+}
+
+inline void adjustFreq(double delta)
+{
+	double newFreq = round(FREQUENCY + delta);
+	newFreq = max(newFreq, 1.0);
+	newFreq = min(newFreq, (double)(SAMPLE_RATE / 2u));
+	setFrequency(newFreq);
+}
+
+inline void adjustAmpl(int delta)
+{
+	setAmplitude(AMPLITUDE + delta);
+}
+
+inline void fireButton(int btn, int tier)
+{
+	static constexpr int amplSteps[3] { 1, 1, 3 }; // fine, medium, medium-fast
+
+	switch (btn)
+	{
+		case 0: adjustFreq(-calcFreqStep(tier));
+			break;
+		case 1: adjustFreq(+calcFreqStep(tier));
+			break;
+		case 6: adjustAmpl(-amplSteps[tier]);
+			break;
+		case 7: adjustAmpl(+amplSteps[tier]);
+			break;
+		default:
+			break;
+	}
+}
+
+#define BTN_HOLD1_MS   400u    // short hold -> medium steps
+#define BTN_HOLD2_MS  1700u    // long hold  -> medium steps, faster repeat
+#define BTN_REPEAT_MS  100u    // repeat interval for tier 1
+#define BTN_REPEAT2_MS  50u    // repeat interval for tier 2
+
+struct BtnState
+{
+	bool     pressed = false;
+	uint32_t pressTime = 0;
+	uint32_t lastRepeat = 0;
+	int      lastTier = 0;
+};
+
+inline void handleButtons()
+{
+	static BtnState btnStates[8];
+
+	const uint8_t  buttons = module.getButtons();
+	const uint32_t now = millis();
+
+	for (int i = 0; i < 8; i++)
+	{
+		const bool pressed = (buttons >> i) & 1;
+		BtnState& s = btnStates[i];
+
+		if (pressed && !s.pressed)
+		{
+			// Leading edge: fire fine step immediately
+			s.pressed    = true;
+			s.pressTime  = now;
+			s.lastRepeat = now;
+			s.lastTier   = 0;
+			fireButton(i, 0);
+		}
+		else if (!pressed)
+		{
+			s.pressed = false;
+		}
+		else
+		{
+			// Still held: determine current tier
+			const uint32_t held = now - s.pressTime;
+			const int tier = (held >= BTN_HOLD2_MS) ? 2 :
+			           (held >= BTN_HOLD1_MS) ? 1 : 0;
+
+			// Fire immediately on tier change, then resume normal repeat cadence
+			if (tier != s.lastTier)
+			{
+				fireButton(i, tier);
+				s.lastTier   = tier;
+				s.lastRepeat = now;
+			}
+			else if (tier > 0 && (now - s.lastRepeat >= (tier == 2 ? BTN_REPEAT2_MS : BTN_REPEAT_MS)))
+			{
+				fireButton(i, tier);
+				s.lastRepeat = now;
+			}
+		}
+	}
 }
 
 // -- Serial command parser -----------------------------------------------------
@@ -251,17 +405,15 @@ void setup()
 	Serial.println("Commands:  f <Hz>   s <Hz>   ?");
 	printStatus();
 
-	module.setupDisplay(true, 7);
-	module.setDisplayToDecNumber((int)FREQUENCY, 0);
+	module.setupDisplay(true, 2);
+	module.setLEDs(0);
+	updateDisplay();
 }
 
 void loop()
 {
-	handleSerial(); // non-blocking serial command handler
-
-	//module.setLED(module.isButtonPressed(1) ? TM1638_COLOR_RED :  TM1638_COLOR_GREEN, 0);
-	module.setLEDs(module.getButtons());
-	module.setDisplayToStringWithDots("1.23.45  8.");
+	handleSerial();   // non-blocking serial command handler
+	handleButtons();  // TM1638 button scan + autorepeat
 }
 
 // =============================================================================
@@ -290,3 +442,4 @@ void loop()
 //  At 84 MHz that implies a theoretical maximum of ~2.1-2.5 MHz ISR rate.
 //  However, peripheral bus latency, cache misses on the first LUT access, and
 //  the NVIC overhead in the real silicon are higher than ideal estimates.
+// =============================================================================
