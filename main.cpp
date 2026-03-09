@@ -80,7 +80,7 @@ static void setAmplitude(int pct)
 static void setFrequency(double freq)
 {
 	// Use double for precision at low frequencies
-	FREQUENCY = freq;
+	FREQUENCY = constrain(freq, 1.0f, static_cast<float>(SAMPLE_RATE/2));
 	phaseIncrement = ::lround(freq / (double)SAMPLE_RATE * 4294967296.0);
 
 	updateDisplay();
@@ -155,12 +155,12 @@ static void initDAC()
 	DACC->DACC_CR = DACC_CR_SWRST; // software reset
 
 	DACC->DACC_MR = DACC_MR_TRGEN_DIS			// software trigger (write to CDR starts conversion)
-					| DACC_MR_USER_SEL_CHANNEL1 // fixed channel 0 (DAC0 pin)
+					| DACC_MR_USER_SEL_CHANNEL1 // fixed channel
 					| DACC_MR_WORD_HALF			// 12-bit half-word mode
 					| DACC_MR_REFRESH(1)		// refresh every ~23 us (min value)
 					| DACC_MR_STARTUP_8;		// 8-period start-up (fastest)
 
-	DACC->DACC_CHER = DACC_CHER_CH1; // enable channel 0
+	DACC->DACC_CHER = DACC_CHER_CH1; // enable channel
 }
 
 // -- Display and button UI -----------------------------------------------------
@@ -170,8 +170,6 @@ static void initDAC()
 //    [5..7] amplitude in %, right-aligned
 //  Example at 1 kHz / 75%:  "  1000.075"  (dot on digit 4)
 //
-//  LED bar graph: represents amplitude in 12.5% steps (8 LEDs = 100%)
-//
 //  Button mapping:
 //    B0  freq down    B1  freq up    B6  ampl down    B7  ampl up
 //
@@ -179,13 +177,7 @@ static void initDAC()
 //    click  (< BTN_HOLD1_MS)  : fine step,   fires once on press
 //    hold 1 (>= BTN_HOLD1_MS) : medium step, autorepeats every BTN_REPEAT_MS
 //    hold 2 (>= BTN_HOLD2_MS) : coarse step, autorepeats every BTN_REPEAT_MS
-//
-//  Frequency steps (magnitude-based, always land on clean numbers):
-//    fine   = 10 ^ (floor(log10(freq)) - 2),  minimum 1 Hz
-//    medium = 10 ^ (floor(log10(freq)) - 1),  minimum 1 Hz
-//    coarse = 10 ^ (floor(log10(freq)))
-//
-//  Amplitude steps: fine = 1%, medium = 5%, coarse = 10%
+
 // -----------------------------------------------------------------------------
 
 inline void updateDisplay()
@@ -240,16 +232,15 @@ inline void fireButton(int btn, int tier)
 #define BTN_REPEAT_MS  100u    // repeat interval for tier 1
 #define BTN_REPEAT2_MS  50u    // repeat interval for tier 2
 
-struct BtnState
-{
-	bool     pressed = false;
-	uint32_t pressTime = 0;
-	uint32_t lastRepeat = 0;
-	int      lastTier = 0;
-};
-
 inline void handleButtons()
 {
+	struct BtnState
+	{
+		bool     pressed = false;
+		uint32_t pressTime = 0;
+		uint32_t lastRepeat = 0;
+		int      lastTier = 0;
+	};
 	static BtnState btnStates[8];
 
 	const uint8_t  buttons = module.getButtons();
@@ -346,7 +337,6 @@ static void handleSerial()
 				double f = cmdBuf.substring(2).toDouble();
 				if (f > 0.0 && f < SAMPLE_RATE / 2.0)
 				{
-					FREQUENCY = f;
 					setFrequency(FREQUENCY);
 					Serial.print("Frequency -> ");
 					Serial.print(FREQUENCY, 3);
