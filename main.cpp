@@ -155,12 +155,12 @@ static void initDAC()
 	DACC->DACC_CR = DACC_CR_SWRST; // software reset
 
 	DACC->DACC_MR = DACC_MR_TRGEN_DIS			// software trigger (write to CDR starts conversion)
-					| DACC_MR_USER_SEL_CHANNEL0 // fixed channel 0 (DAC0 pin)
+					| DACC_MR_USER_SEL_CHANNEL1 // fixed channel 0 (DAC0 pin)
 					| DACC_MR_WORD_HALF			// 12-bit half-word mode
 					| DACC_MR_REFRESH(1)		// refresh every ~23 us (min value)
 					| DACC_MR_STARTUP_8;		// 8-period start-up (fastest)
 
-	DACC->DACC_CHER = DACC_CHER_CH0; // enable channel 0
+	DACC->DACC_CHER = DACC_CHER_CH1; // enable channel 0
 }
 
 // -- Display and button UI -----------------------------------------------------
