@@ -21,9 +21,6 @@
 //        "f 440\n"   -> sets 440 Hz
 //        "s 96000\n" -> sets 96 000 Hz sample rate (restarts timer)
 //        "?\n"       -> prints current settings
-//
-//  ------
-//  Practical reliable sample rate ~170-200 kHz with this ISR approach (see bottom of file for details).
 // =============================================================================
 
 #include <Arduino.h>
@@ -59,6 +56,9 @@ static void buildLUT()
 // -----------------------------------------------------------------------------
 static volatile uint32_t phaseAccum = 0;
 static volatile uint32_t phaseIncrement = 0;
+
+// -- Waveform ------------------------------------------------------------------
+static volatile bool waveSquare = false;
 
 // -- Amplitude -----------------------------------------------------------------
 //  AMPLITUDE  : 0-100 percent (UI / display use only, not read in ISR)
@@ -96,14 +96,23 @@ void TC0_Handler()
 	uint32_t phase = phaseAccum;
 	phaseAccum = phase + phaseIncrement;
 
-	// Split into integer index and fractional part
-	uint32_t idx = phase >> 20;			  // top 12 bits  -> 0 ... 4095
-	uint32_t frac = phase & 0x000FFFFFUL; // bottom 20 bits -> 0 ... 1 048 575
+	int32_t value;
+	if (waveSquare)
+	{
+		// Square wave: top bit of phase determines half-cycle
+		value = (phase >> 31) ? 4095 : 0;
+	}
+	else
+	{
+		// Split into integer index and fractional part
+		uint32_t idx = phase >> 20;			  // top 12 bits  -> 0 ... 4095
+		uint32_t frac = phase & 0x000FFFFFUL; // bottom 20 bits -> 0 ... 1 048 575
 
-	// Linear interpolation between adjacent LUT samples
-	int32_t a = sineLUT[idx];
-	int32_t b = sineLUT[(idx + 1u) & LUT_MASK];
-	int32_t value = a + (((b - a) * (int32_t)frac) >> 20);
+		// Linear interpolation between adjacent LUT samples
+		int32_t a = sineLUT[idx];
+		int32_t b = sineLUT[(idx + 1u) & LUT_MASK];
+		value = a + (((b - a) * (int32_t)frac) >> 20);
+	}
 
 	// Apply amplitude scaling around midpoint (2048)
 	// amplScale is 0-4096 where 4096 = 100%; shift-by-12 replaces division
@@ -155,7 +164,7 @@ static void initDAC()
 	DACC->DACC_CR = DACC_CR_SWRST; // software reset
 
 	DACC->DACC_MR = DACC_MR_TRGEN_DIS			// software trigger (write to CDR starts conversion)
-					| DACC_MR_USER_SEL_CHANNEL1 // fixed channel
+					| DACC_MR_USER_SEL_CHANNEL1
 					| DACC_MR_WORD_HALF			// 12-bit half-word mode
 					| DACC_MR_REFRESH(1)		// refresh every ~23 us (min value)
 					| DACC_MR_STARTUP_8;		// 8-period start-up (fastest)
@@ -171,7 +180,7 @@ static void initDAC()
 //  Example at 1 kHz / 75%:  "  1000.075"  (dot on digit 4)
 //
 //  Button mapping:
-//    B0  freq down    B1  freq up    B6  ampl down    B7  ampl up
+//    B0  freq down    B1  freq up    B4  wave toggle    B6  ampl down    B7  ampl up
 //
 //  Three step tiers based on how long the button is held:
 //    click  (< BTN_HOLD1_MS)  : fine step,   fires once on press
@@ -217,6 +226,13 @@ inline void fireButton(int btn, int tier)
 		case 0: adjustFreq(-calcFreqStep(tier));
 			break;
 		case 1: adjustFreq(+calcFreqStep(tier));
+			break;
+		case 2:
+			if (tier == 0) // toggle only on initial press, not autorepeat
+			{
+				waveSquare = !waveSquare;
+				module.setLEDs(waveSquare ? 4 : 0); // LED #3 on = square
+			}
 			break;
 		case 6: adjustAmpl(-amplSteps[tier]);
 			break;
