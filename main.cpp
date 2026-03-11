@@ -391,13 +391,13 @@ void setup()
 	initDAC();
 	startTimer(SAMPLE_RATE);
 
-	Serial.println("\nArduino Due Sine Generator -- ready");
-	Serial.println("Commands:  f <Hz>   s <Hz>   ?");
-	printStatus();
-
 	module.setupDisplay(true, 2);
 	module.setLEDs(0);
 	updateDisplay();
+
+	Serial.println("\nArduino Due Sine Generator -- ready");
+	Serial.println("Commands:  f <Hz>   s <Hz>   ?");
+	printStatus();
 }
 
 void loop()
